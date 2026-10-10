@@ -181,11 +181,14 @@ func parseGitHubReleaseAsset(path string) (githubReleaseAsset, bool) {
 }
 
 // handleArtifact fetches and caches a version-pinned download in the artifact
-// cache. The configured upstream name is part of the cache identity so two
-// upstreams serving the same path never share bytes.
+// cache. The upstream, full path and query identify the cached bytes, since
+// distinct downloads can have the same captured name, version and filename.
 func (h *GenericHandler) handleArtifact(w http.ResponseWriter, r *http.Request, repository, upstreamURL, path string, artifact genericArtifact) {
 	downloadURL := upstreamURL + "/" + path
-	cacheFilename := repository + "/" + artifact.filename
+	if r.URL.RawQuery != "" {
+		downloadURL += "?" + r.URL.RawQuery
+	}
+	cacheFilename := repository + "/" + h.cacheKey(repository, upstreamURL, path, r.URL.RawQuery) + "/" + artifact.filename
 
 	h.proxy.Logger.Info("generic artifact download",
 		"repository", repository, "name", artifact.name, "version", artifact.version, "filename", artifact.filename)
@@ -213,14 +216,14 @@ func (h *GenericHandler) handleMetadata(w http.ResponseWriter, r *http.Request, 
 	}
 
 	h.proxy.ProxyCached(w, r, target, genericEcosystem,
-		h.metadataCacheKey(repository, upstreamURL, path, r.URL.RawQuery), genericAcceptAny)
+		h.cacheKey(repository, upstreamURL, path, r.URL.RawQuery), genericAcceptAny)
 }
 
-// metadataCacheKey derives the metadata cache key from the upstream name, its
+// cacheKey derives the cache key from the upstream name, its
 // URL, the request path and query. Hashing the identity keeps distinct
 // upstreams from sharing entries and drops cached entries when an upstream is
 // repointed, mirroring APKHandler.metadataCacheKey.
-func (h *GenericHandler) metadataCacheKey(repository, upstreamURL, path, query string) string {
+func (h *GenericHandler) cacheKey(repository, upstreamURL, path, query string) string {
 	identity := repository + "\x00" + upstreamURL + "\x00" + path + "\x00" + query
 	digest := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(digest[:])

@@ -176,6 +176,56 @@ func TestGenericHandler_ArtifactPatternIsCachedAndOtherPathsAreNot(t *testing.T)
 	}
 }
 
+func TestGenericHandler_ConfiguredArtifactsKeepDistinctPathsAndQueries(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		targets []string
+	}{
+		{"platform paths", []string{
+			"/releases/tool/1.0.0/linux/tool.tar.gz",
+			"/releases/tool/1.0.0/darwin/tool.tar.gz",
+		}},
+		{"query parameters", []string{
+			"/releases/tool/1.0.0/linux/tool.tar.gz?token=example&variant=a%2Bb",
+			"/releases/tool/1.0.0/linux/tool.tar.gz?token=other&variant=a+b",
+			"/releases/tool/1.0.0/linux/tool.tar.gz",
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var requests atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				// Echo the exact target so dropped or changed queries fail too.
+				_, _ = w.Write([]byte(r.URL.RequestURI()))
+			}))
+			defer upstream.Close()
+
+			proxy, _, store, _ := setupTestProxy(t)
+			store.seekable = true
+			fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+			proxy.Fetcher = fetcher
+			t.Cleanup(func() { _ = fetcher.Close() })
+			h := NewGenericHandler(proxy,
+				map[string]string{"downloads": upstream.URL},
+				map[string][]string{"downloads": {`releases/(?P<name>tool)/(?P<version>[^/]+)/(linux|darwin)/(?P<file>[^/]+)`}})
+
+			for pass := range 2 {
+				for _, target := range tt.targets {
+					w := serveGenericRequest(h, "/downloads"+target)
+					if w.Code != http.StatusOK || w.Body.String() != target {
+						t.Fatalf("pass %d, target %q: status = %d, body = %q; want 200 %q",
+							pass, target, w.Code, w.Body.String(), target)
+					}
+				}
+				upstream.Close()
+			}
+			if got := requests.Load(); got != int32(len(tt.targets)) {
+				t.Errorf("upstream requests = %d, want %d", got, len(tt.targets))
+			}
+		})
+	}
+}
+
 func TestGenericHandler_RejectsUnknownUpstreamAndBadPaths(t *testing.T) {
 	h := NewGenericHandler(testProxy(), map[string]string{"github": "https://github.com"})
 
