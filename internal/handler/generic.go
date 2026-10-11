@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -193,8 +195,11 @@ func (h *GenericHandler) handleArtifact(w http.ResponseWriter, r *http.Request, 
 	h.proxy.Logger.Info("generic artifact download",
 		"repository", repository, "name", artifact.name, "version", artifact.version, "filename", artifact.filename)
 
-	result, err := h.proxy.GetOrFetchArtifactFromURL(
-		r.Context(), genericEcosystem, artifact.name, artifact.version, cacheFilename, downloadURL)
+	result, err := h.legacyArtifact(r.Context(), repository, downloadURL, artifact)
+	if err == nil && result == nil {
+		result, err = h.proxy.GetOrFetchArtifactFromURL(
+			r.Context(), genericEcosystem, artifact.name, artifact.version, cacheFilename, downloadURL)
+	}
 	if err != nil {
 		h.proxy.serveArtifactError(w, err, "failed to fetch artifact")
 		return
@@ -204,6 +209,25 @@ func (h *GenericHandler) handleArtifact(w http.ResponseWriter, r *http.Request, 
 		result.Artifact.MediaType = "application/octet-stream"
 	}
 	ServeArtifactRequest(w, r, result)
+}
+
+// legacyArtifact returns the artifact cached under the unhashed
+// {repository}/{filename} key, provided its recorded upstream URL is
+// downloadURL, so a different path or query sharing that key is not served.
+func (h *GenericHandler) legacyArtifact(ctx context.Context, repository, downloadURL string, artifact genericArtifact) (*CacheResult, error) {
+	pkgPURL, versionPURL, err := packagePURLStrings(genericEcosystem, artifact.name, artifact.version)
+	if err != nil {
+		return nil, err
+	}
+	filename := repository + "/" + artifact.filename
+	record, err := h.proxy.DB.GetArtifact(versionPURL, filename)
+	if err != nil {
+		return nil, fmt.Errorf("checking artifact cache: %w", err)
+	}
+	if record == nil || record.UpstreamURL != downloadURL {
+		return nil, nil
+	}
+	return h.proxy.checkCache(ctx, pkgPURL, versionPURL, filename)
 }
 
 // handleMetadata serves any other path through the metadata cache. The query

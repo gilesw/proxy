@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -332,6 +333,54 @@ func TestGenericHandler_ReleaseAssetIsCachedAndServedWhenUpstreamDown(t *testing
 	}
 	if w.Body.Len() != 0 {
 		t.Errorf("HEAD: body length = %d, want 0", w.Body.Len())
+	}
+}
+
+func TestGenericHandler_ServesReleaseAssetCachedUnderUnhashedKey(t *testing.T) {
+	asset := []byte("jq binary bytes")
+	var available atomic.Bool
+	available.Store(true)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !available.Load() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write(asset)
+	}))
+	defer upstream.Close()
+
+	proxy, _, store, _ := setupTestProxy(t)
+	store.seekable = true
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+
+	// Cache the asset the way releases before hashed keys did.
+	result, err := proxy.GetOrFetchArtifactFromURL(context.Background(), genericEcosystem,
+		"jqlang/jq", "jq-1.7.1", "github/jq-linux-amd64", upstream.URL+testReleaseAssetPath)
+	if err != nil {
+		t.Fatalf("priming legacy entry: %v", err)
+	}
+	if result.Reader != nil {
+		_ = result.Reader.Close()
+	}
+	available.Store(false)
+
+	h := NewGenericHandler(proxy, map[string]string{"github": upstream.URL})
+	w := serveGenericRequest(h, "/github"+testReleaseAssetPath)
+	if w.Code != http.StatusOK || w.Body.String() != string(asset) {
+		t.Fatalf("legacy entry: status = %d, body = %q; want 200 %q", w.Code, w.Body.String(), asset)
+	}
+
+	w = serveGenericRequest(h, "/github"+testReleaseAssetPath+"?x=1")
+	if w.Code != http.StatusBadGateway {
+		t.Errorf("with query: status = %d, want 502", w.Code)
+	}
+
+	repointed := NewGenericHandler(proxy, map[string]string{"github": upstream.URL + "/mirror"})
+	w = serveGenericRequest(repointed, "/github"+testReleaseAssetPath)
+	if w.Code != http.StatusBadGateway {
+		t.Errorf("repointed upstream: status = %d, want 502", w.Code)
 	}
 }
 
