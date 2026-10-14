@@ -1061,6 +1061,9 @@ func (p *Proxy) ProxyUpstream(w http.ResponseWriter, r *http.Request, upstreamUR
 
 	resp, err := p.HTTPClient.Do(req)
 	if err != nil {
+		if writeUpstreamHeld(w, err) {
+			return
+		}
 		p.Logger.Error("upstream request failed", "error", err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
@@ -1080,6 +1083,9 @@ func (p *Proxy) ProxyFile(w http.ResponseWriter, r *http.Request, upstreamURL st
 
 	resp, err := p.HTTPClient.Do(req)
 	if err != nil {
+		if writeUpstreamHeld(w, err) {
+			return
+		}
 		http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
 		return
 	}
@@ -1136,6 +1142,9 @@ func (p *Proxy) serveArtifactError(w http.ResponseWriter, err error, clientMsg s
 	}
 	if errors.Is(err, ErrArtifactBlocked) || errors.Is(err, ErrVersionDenied) {
 		JSONError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if writeUpstreamHeld(w, err) {
 		return
 	}
 	p.Logger.Error("failed to get artifact", "error", err)
@@ -1615,6 +1624,9 @@ func (p *Proxy) proxyCachedWithEncoding(w http.ResponseWriter, r *http.Request, 
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
+		if writeUpstreamHeld(w, err) {
+			return
+		}
 		p.Logger.Error("metadata fetch failed", "error", err)
 		http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
 		return
@@ -1701,6 +1713,9 @@ func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upst
 
 	resp, err := p.HTTPClient.Do(req)
 	if err != nil {
+		if writeUpstreamHeld(w, err) {
+			return
+		}
 		http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
 		return
 	}
