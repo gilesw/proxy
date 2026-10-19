@@ -176,5 +176,8 @@ func TestVersionPage_CacheDeleteButtons(t *testing.T) {
 		if enabled && !strings.Contains(body, `data-cache-url="/ui/api/cache/maven/com.example:lib/1.0"`) {
 			t.Errorf("page has no data-cache-url for the version")
 		}
+		if got := strings.Contains(body, `<script src="/ui/static/cache-delete.js"`); got != enabled {
+			t.Errorf("enabled=%v: page loads cache-delete.js = %v", enabled, got)
+		}
 	}
 }
